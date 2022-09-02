@@ -15,7 +15,7 @@ learning_rate = 1e-3
 max_epoch = 100
 device = torch.device("cuda")
 num_workers = 5
-load_epoch = -1
+load_epoch = 98 #-1
 generate = True
 
 class Model(nn.Module):
@@ -88,15 +88,26 @@ class Model(nn.Module):
         return pred, mu, logvar
 
 
+
+def renormalize(tensor):
+        minFrom= tensor.min()
+        maxFrom= tensor.max()
+        minTo = 0
+        maxTo=1
+        return minTo + (maxTo - minTo) * ((tensor - minFrom) / (maxFrom - minFrom))
+
+
 def plot(epoch, pred, y,name='test_'):
-    class_id = ['line', 'noline', 'others']
+    class_id = ['line', 'noline', 'others', 'unkown1', 'unknown2']
     if not os.path.isdir('./images'):
         os.mkdir('./images')
-    fig = plt.figure(figsize=(16,16))
-    for i in range(6):
-        #pred = pred[i][:,:,::-1].transpose((2,1,0))
+    fig = plt.figure(figsize=(32,32))
+    for i in range(1): #6
+        #pred[i] = pred[i][:,:,::-1].transpose((2,1,0))
+        #pred[i] = np.array(pred[i])
         ax = fig.add_subplot(3,2,i+1)
-        ax.imshow(pred[i][2])#cmap='gray'
+        #pred[i] = renormalize(pred[i])
+        ax.imshow(pred[i][0],cmap='gray')#cmap='gray'
         ax.axis('off')
         ax.title.set_text(str(class_id[y[i]]))
     plt.savefig("./images/{}epoch_{}.jpg".format(name, epoch))
@@ -112,13 +123,13 @@ def loss_function(x, pred, mu, logvar):
     return recon_loss, kld
 
 
-def train(epoch, model, train_loader, optim):
+def train(epoch, model, train_loader, optim, args):
     reconstruction_loss = 0
     kld_loss = 0
     total_loss = 0
     for i,(x,y) in enumerate(train_loader):
         try:
-            label = np.zeros((x.shape[0], 3))#10
+            label = np.zeros((x.shape[0], args.ncls))#10
             label[np.arange(x.shape[0]), y] = 1
             label = torch.tensor(label)
 
@@ -153,14 +164,21 @@ def train(epoch, model, train_loader, optim):
     total_loss /= len(train_loader.dataset)
     return total_loss, kld_loss,reconstruction_loss
 
-def test(epoch, model, test_loader):
+import cv2
+def test(epoch, model, test_loader, args):
+    count = 1
+    save_img = True
+    save_dir = "/home/ali/CVAE_MNIST/runs/detect/"
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+        
     reconstruction_loss = 0
     kld_loss = 0
     total_loss = 0
     with torch.no_grad():
         for i,(x,y) in enumerate(test_loader):
             try:
-                label = np.zeros((x.shape[0], 3)) #10
+                label = np.zeros((x.shape[0], args.ncls)) #10
                 label[np.arange(x.shape[0]), y] = 1
                 label = torch.tensor(label)
 
@@ -172,9 +190,18 @@ def test(epoch, model, test_loader):
                 reconstruction_loss += recon_loss.cpu().data.numpy()*x.shape[0]
                 kld_loss += kld.cpu().data.numpy()*x.shape[0]
                 if i == 0:
+                    print('nothing')
                     # print("gr:", x[0,0,:5,:5])
                     # print("pred:", pred[0,0,:5,:5])
-                    plot(epoch, pred.cpu().data.numpy(), y.cpu().data.numpy())
+                    #pred = pred[:,:,::-1].transpose((2,1,0))
+                    #plot(epoch, pred.cpu().data.numpy(), y.cpu().data.numpy())
+                if save_img:
+                    file_name = str(count) + '.jpg'
+                    pred.cpu().data.numpy()
+                    pred = pred[:,:,::-1].transpose((2,1,0))
+                    save_path = os.path.join(save_dir,file_name)
+                    cv2.imwrite(save_path,pred)
+                    count+=1
             except Exception as e:
                 traceback.print_exe()
                 #print('Exception:{}'.format(e))
@@ -187,9 +214,9 @@ def test(epoch, model, test_loader):
 
 
 
-def generate_image(epoch,z, y, model):
+def generate_image(epoch,z, y, model, args):
     with torch.no_grad():
-        label = np.zeros((y.shape[0], 3))
+        label = np.zeros((y.shape[0], args.ncls))
         label[np.arange(z.shape[0]), y] = 1
         label = torch.tensor(label)
 
@@ -227,12 +254,12 @@ def get_args():
     parser.add_argument('-nz','--nz',type=int,help='compress length',default=200)
     parser.add_argument('-nc','--nc',type=int,help='num of channel',default=3)
     parser.add_argument('-lr','--lr',type=float,help='learning rate',default=2e-4)
-    parser.add_argument('-batchsize','--batch-size',type=int,help='train batch size',default=64)
+    parser.add_argument('-batchsize','--batch-size',type=int,help='train batch size',default=1)
     parser.add_argument('-savedir','--save-dir',help='save model dir',default=r"/home/ali/AutoEncoder-Pytorch/runs/train")
     parser.add_argument('-weights','--weights',help='save model dir',default='')
     parser.add_argument('-epoch','--epoch',type=int,help='num of epochs',default=30)
     parser.add_argument('-train','--train',type=bool,help='train model',default=True)
-    parser.add_argument('-ncls','--ncls',type=int,help='num of class',default=3)
+    parser.add_argument('-ncls','--ncls',type=int,help='num of class',default=5)
     return parser.parse_args()    
 
 
@@ -254,10 +281,20 @@ def load_data2(img_dir,args):
     print('data_loader length : {}'.format(len(data_loader)))
     return data_loader
 
+def generate_image_2(epoch,z, y, model, args):
+    with torch.no_grad():
+        label = np.zeros((y.shape[0], args.ncls))
+        label[np.arange(z.shape[0]), y] = 1
+        label = torch.tensor(label)
 
+        pred = model.decoder(torch.cat((z.to(device),label.float().to(device)), dim=1))
+        plot(epoch, pred.cpu().data.numpy(), y.cpu().data.numpy(),name='Eval_')
+        print("data Plotted")
 
 if __name__ == "__main__":
     
+    TRAIN = False
+    TEST = True
     args = get_args()
     
     train_loader =  load_data2(args.img_dir,args)
@@ -274,31 +311,36 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=0.001)
 
-
-    train_loss_list = []
-    test_loss_list = []
-    for i in range(load_epoch+1, max_epoch):
-        model.train()
-        train_total, train_kld, train_loss = train(i, model, train_loader, optimizer)
-        with torch.no_grad():
-            model.eval()
-            test_total, test_kld, test_loss = test(i, model, test_loader)
-            if generate:
-                z = torch.randn(6, 32).to(device)
-                y = torch.tensor([1,1,2,2,3,3]) - 1
-                #y = torch.tensor([1,2,3]) - 1
-                generate_image(i,z, y, model)
-            
-        print("Epoch: {}/{} Train loss: {}, Train KLD: {}, Train Reconstruction Loss:{}".format(i, max_epoch,train_total, train_kld, train_loss))
-        print("Epoch: {}/{} Test loss: {}, Test KLD: {}, Test Reconstruction Loss:{}".format(i, max_epoch, test_loss, test_kld, test_loss))
-
-        save_model(model, i)
-        train_loss_list.append([train_total, train_kld, train_loss])
-        test_loss_list.append([test_total, test_kld, test_loss])
-        np.save("train_loss", np.array(train_loss_list))
-        np.save("test_loss", np.array(test_loss_list))
-
-
+    if TRAIN:
+        train_loss_list = []
+        test_loss_list = []
+        for i in range(load_epoch+1, max_epoch):
+            model.train()
+            train_total, train_kld, train_loss = train(i, model, train_loader, optimizer, args)
+            with torch.no_grad():
+                model.eval()
+                test_total, test_kld, test_loss = test(i, model, test_loader, args)
+                if generate:
+                    z = torch.randn(6, 32).to(device)
+                    y = torch.tensor([1,1,2,2,4,5]) - 1
+                    #y = torch.tensor([1,2,3]) - 1
+                    generate_image(i,z, y, model, args)
+                
+            print("Epoch: {}/{} Train loss: {}, Train KLD: {}, Train Reconstruction Loss:{}".format(i, max_epoch,train_total, train_kld, train_loss))
+            print("Epoch: {}/{} Test loss: {}, Test KLD: {}, Test Reconstruction Loss:{}".format(i, max_epoch, test_loss, test_kld, test_loss))
+    
+            save_model(model, i)
+            train_loss_list.append([train_total, train_kld, train_loss])
+            test_loss_list.append([test_total, test_kld, test_loss])
+            np.save("train_loss", np.array(train_loss_list))
+            np.save("test_loss", np.array(test_loss_list))
+  
+    if TEST:
+        for i in range(load_epoch+1, max_epoch):
+            with torch.no_grad():
+                model.eval()
+                test_total, test_kld, test_loss = test(i, model, test_loader, args)
+                #generate_image_2(i,z, y, model, args)
     # i, (example_data, exaple_target) = next(enumerate(test_loader))
     # print(example_data[0,0].shape)
     # plt.figure(figsize=(5,5), dpi=100)
